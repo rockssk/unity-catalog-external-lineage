@@ -1,0 +1,6 @@
+{"run_name":"openlineage-ingest (volume)",
+ "tasks":[{"task_key":"ingest","notebook_task":{
+   "notebook_path":"/Workspace/Users/<your-user>/unity-catalog-external-lineage/notebooks/openlineage_kafka_ingest",
+   "base_parameters":{"source":"volume","catalog":"main","schema":"ext_lineage_demo","name_prefix":"extlin__"}},
+   "environment_key":"default"}],
+ "environments":[{"environment_key":"default","spec":{"client":"3","dependencies":["databricks-sdk>=0.70.0"]}}]}
