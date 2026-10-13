@@ -16,6 +16,17 @@ BOOT="localhost:9092"
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}"
 export PATH="$JAVA_HOME/bin:$PATH"
 topics() { "$KAFKA/bin/kafka-topics.sh" --bootstrap-server "$BOOT" "$@" 2>/dev/null; }
+ALL_TOPICS="$LINEAGE_TOPIC oms.orders.raw trades.executions trades.fund_flows"
+ensure_topics() {   # create missing topics and verify they are really there (topic deletion is async)
+  for t in $ALL_TOPICS; do
+    for _ in $(seq 1 20); do
+      topics --list | grep -qx "$t" && break
+      topics --create --if-not-exists --topic "$t" --partitions 1 --replication-factor 1 >/dev/null || true
+      sleep 1
+    done
+    topics --list | grep -qx "$t" || { echo "ERROR: topic $t could not be created" >&2; exit 1; }
+  done
+}
 
 case "${1:-}" in
   up)
@@ -30,9 +41,7 @@ case "${1:-}" in
     fi
     topics --list >/dev/null || "$KAFKA/bin/kafka-server-start.sh" -daemon "$CFG"
     for _ in $(seq 1 30); do topics --list >/dev/null && break; sleep 1; done
-    for t in "$LINEAGE_TOPIC" oms.orders.raw trades.executions trades.fund_flows; do
-      topics --create --if-not-exists --topic "$t" --partitions 1 --replication-factor 1 >/dev/null
-    done
+    ensure_topics
     echo "Kafka up on $BOOT; topics:"; topics --list
     ;;
   down)
@@ -50,17 +59,20 @@ case "${1:-}" in
     # fresh data topics + watcher/streams state (lineage topic and agent offsets are kept). Stop streams/watcher first.
     pkill -f 'java.*demo[.]TradeEnricher' 2>/dev/null || true; pkill -f 'schema_watcher[.]py' 2>/dev/null || true; sleep 3
     for t in oms.orders.raw trades.executions trades.fund_flows; do topics --delete --topic "$t" >/dev/null || true; done
-    topics --list | grep '^trade-enricher-' | while read -r t; do topics --delete --topic "$t" >/dev/null || true; done
+    # `|| true`: with pipefail, grep finding no internal topics would otherwise abort the whole reset
+    { topics --list | grep '^trade-enricher-' || true; } | while read -r t; do topics --delete --topic "$t" >/dev/null || true; done
     for g in uc-schema-watcher trade-enricher; do
       "$KAFKA/bin/kafka-consumer-groups.sh" --bootstrap-server "$BOOT" --delete --group "$g" >/dev/null 2>&1 || true
     done
-    rm -rf "$KDIR/streams-state" "$KDIR/schema_state.json"; sleep 2
-    for t in oms.orders.raw trades.executions trades.fund_flows; do
-      topics --create --if-not-exists --topic "$t" --partitions 1 --replication-factor 1 >/dev/null
+    rm -rf "$KDIR/streams-state" "$KDIR/schema_state.json"
+    for _ in $(seq 1 30); do   # wait until the broker has finished deleting (otherwise re-create is silently skipped)
+      topics --list | grep -qE '^(oms\.orders\.raw|trades\.executions|trades\.fund_flows|trade-enricher-.*)$' || break; sleep 1
     done
-    echo "data topics, schema-watcher state and streams state reset"
+    ensure_topics
+    echo "data topics, schema-watcher state and streams state reset; topics:"; topics --list | grep -v '^__'
     ;;
   watcher)
+    ensure_topics
     cd "$ROOT"; exec python3.11 -u schema_watcher.py
     ;;
   streams-stop)
@@ -71,6 +83,7 @@ case "${1:-}" in
     javac -d "$ROOT/streams/classes" -cp "$KAFKA/libs/*" "$ROOT"/streams/src/demo/*.java && echo "built streams/classes"
     ;;
   streams-run)
+    ensure_topics   # before the instance check, so the check happens right before launch
     # one instance per state dir: stop any previous run (e.g. a background copy) before starting
     if pgrep -f 'java.*demo[.]TradeEnricher' >/dev/null; then
       echo "stopping running trade-enricher..."; pkill -f 'java.*demo[.]TradeEnricher' || true

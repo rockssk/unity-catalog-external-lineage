@@ -94,6 +94,13 @@ public final class TradeEnricher {
         Map<String, List<String>> inputSchemas = Map.of(RAW, List.of("ord_id", "acct", "ticker", "side", "qty", "px", "ts", "status"));
 
         KafkaStreams streams = new KafkaStreams(topo, p);
+        // exit (instead of hanging in join()) if Streams dies, e.g. a source topic is missing
+        streams.setStateListener((now, before) -> {
+            if (now == KafkaStreams.State.ERROR || (now == KafkaStreams.State.NOT_RUNNING && before == KafkaStreams.State.PENDING_ERROR)) {
+                System.err.println("trade-enricher stopped: Kafka Streams entered " + now + " (see errors above). Exiting.");
+                Runtime.getRuntime().halt(1);
+            }
+        });
         Runtime.getRuntime().addShutdownHook(new Thread(() -> streams.close(java.time.Duration.ofSeconds(10))));
         streams.start();
         new OpenLineageEmitter(bootstrap, "openlineage.events").emit("START", "trade-enricher", topo, inputSchemas, colLineage);
