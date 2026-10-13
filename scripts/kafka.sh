@@ -48,7 +48,7 @@ case "${1:-}" in
     ;;
   demo-reset)
     # fresh data topics + watcher/streams state (lineage topic and agent offsets are kept). Stop streams/watcher first.
-    pkill -f 'java.*demo[.]TradeEnricher' 2>/dev/null || true; pkill -f 'python.*schema_watcher[.]py' 2>/dev/null || true; sleep 3
+    pkill -f 'java.*demo[.]TradeEnricher' 2>/dev/null || true; pkill -f 'schema_watcher[.]py' 2>/dev/null || true; sleep 3
     for t in oms.orders.raw trades.executions trades.fund_flows; do topics --delete --topic "$t" >/dev/null || true; done
     topics --list | grep '^trade-enricher-' | while read -r t; do topics --delete --topic "$t" >/dev/null || true; done
     for g in uc-schema-watcher trade-enricher; do
